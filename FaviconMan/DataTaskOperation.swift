@@ -27,10 +27,11 @@ import Foundation
 
 class DataTaskOperation: Operation {
 
-  var completionHandler: ((Data?, URLResponse?, Error?) -> Void)?
+  var completionHandler: ((Result<(Data?, URLResponse), FMError>) -> Void)?
   private let request: URLRequest
   private weak var session: URLSession?
   private var dataTask: URLSessionDataTask?
+  private let underlyingQueue: DispatchQueue
   private var _isExecuting: Bool = false {
     willSet {
       willChangeValue(forKey: "isExecuting")
@@ -61,25 +62,43 @@ class DataTaskOperation: Operation {
   }
 
   init(request: URLRequest,
-       session: URLSession) {
+       session: URLSession,
+       underlyingQueue: DispatchQueue) {
     self.request = request
     self.session = session
+    self.underlyingQueue = underlyingQueue
   }
   
   override func start() {
     guard !isCancelled else {
       _isFinished = true
-      completionHandler?(nil, nil, FMError.cancelledBeforeStart)
+      completionHandler?(.failure(FMError.cancelledBeforeStart))
       reset()
       return;
     }
     guard let session = session else { fatalError("Data task operation must has a session.") }
     dataTask = session.dataTask(with: request,
-                                completionHandler: { [weak self] (data, response, error) in
+                                completionHandler: { [weak self] (data, urlResponse, error) in
                                   guard let self = self else { return }
-                                  self.completionHandler?(data, response, error)
-                                  self.done()
-                                  
+                                  self.underlyingQueue.async {
+                                    defer {
+                                      self.done()
+                                    }
+                                    guard let urlResponse = urlResponse else {
+                                      self.completionHandler?(.failure(.responseNil))
+                                      return
+                                    }
+                                    if urlResponse.isHTTPStatusCodeOK &&
+                                      self.request.httpMethod == "HEAD" {
+                                      self.completionHandler?(.success((data, urlResponse)))
+                                      return
+                                    }
+                                    guard error == nil else {
+                                      self.completionHandler?(.failure(.dataTaskError(error: error!)))
+                                      return
+                                    }
+                                    self.completionHandler?(.success((data, urlResponse)))
+                                  }
     })
     _isExecuting = true
     dataTask?.resume()
@@ -107,11 +126,11 @@ class DataTaskOperation: Operation {
   }
   
   private func reset() {
-    if let dataTask = dataTask {
+    if let dataTask = self.dataTask {
       dataTask.cancel()
       self.dataTask = nil
     }
-    session = nil
-    completionHandler = nil
+    self.session = nil
+    self.completionHandler = nil
   }
 }

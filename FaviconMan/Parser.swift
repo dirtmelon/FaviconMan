@@ -55,13 +55,7 @@ class Parser {
           let sizeString = sizeAttributedString.components(separatedBy: .whitespaces).last else {
             return nil
         }
-        let array = sizeString.components(separatedBy: "x")
-        guard array.count == 2,
-          let width = Int(array[0]),
-          let height = Int(array[0]) else {
-          return nil
-        }
-        return IconSize(width: width, height: height)
+        return self.iconSize(from: sizeString)
       }()
       icons.append(Icon(url: url,
                         type: iconType,
@@ -107,5 +101,56 @@ class Parser {
       }
     }
     return icons
+  }
+
+  func parseManifestURLs() -> [URL] {
+    var urls: [URL] = []
+    guard let document = document else {
+      return []
+    }
+    for element in document.query(for: "/html/head/link") {
+      guard let rel = element.attributes["rel"],
+        rel == "manifest",
+        let href = element.attributes["href"],
+        let url = URL(string: href, relativeTo: baseURL) else {
+          continue
+      }
+      urls.append(url)
+    }
+    return urls
+  }
+
+  func parseManifestIcons(jsonData: Data) -> [Icon] {
+    var icons: [Icon] = []
+    guard let manifest = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
+      let iconDictionaries = manifest["icons"] as? [[String: String]] else {
+      return icons
+    }
+    for iconDictionary in iconDictionaries {
+      guard let src = iconDictionary["src"],
+        let url = URL(string: src) else {
+        continue
+      }
+      let iconSize: IconSize?
+      if let sizeString = iconDictionary["sizes"] {
+        iconSize = self.iconSize(from: sizeString)
+      } else  {
+        iconSize = nil
+      }
+      icons.append(Icon(url: url, type: .manifest,
+                        size: iconSize,
+                        mimeType: iconDictionary["type"]))
+    }
+    return icons
+  }
+
+  private func iconSize(from string: String) -> IconSize? {
+    let array = string.components(separatedBy: "x")
+    guard array.count == 2,
+      let width = Int(array[0]),
+      let height = Int(array[0]) else {
+      return nil
+    }
+    return IconSize(width: width, height: height)
   }
 }

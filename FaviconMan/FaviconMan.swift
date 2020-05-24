@@ -41,7 +41,7 @@ open class FaviconMan {
   public let session: URLSession
   /// Internal map between `Request` and all `URLSessionDataTask` that may be in flight for them.
   private var requestOperations: [Request: [Operation]] = [:]
-  
+  /// Concurrent operation queue, perform operation
   private let operationQueue: OperationQueue
   
   /// Creates a FaviconMan from a URLSession and other parameters
@@ -84,9 +84,10 @@ open class FaviconMan {
 
   func operation(for request: Request,
                  urlRequest: URLRequest,
-                 completionHandler: @escaping (Data?, URLResponse?, Error?) -> Void) -> DataTaskOperation {
+                 completionHandler: @escaping (Result<(Data?, URLResponse), FMError>) -> Void) -> DataTaskOperation {
     let operation = DataTaskOperation(request: urlRequest,
-                                          session: self.session)
+                                      session: self.session,
+                                      underlyingQueue: underlyingQueue)
     operation.completionHandler = completionHandler
     return operation
   }
@@ -102,17 +103,22 @@ open class FaviconMan {
   }
   
   func addOperations(for request: Request, operations: [Operation]) {
-    
     for operation in operations {
       operation.completionBlock = { [weak self, weak operation] in
         guard let self = self,
           let operation = operation else { return }
         self.underlyingQueue.async {
           self.removeOperation(for: request, operation: operation)
+          for dependency in operation.dependencies {
+            operation.removeDependency(dependency)
+          }
         }
       }
     }
-    requestOperations[request] = operations
+    if requestOperations[request] == nil {
+      requestOperations[request] = []
+    }
+    requestOperations[request]?.append(contentsOf: operations)
     operationQueue.addOperations(operations, waitUntilFinished: false)
   }
 

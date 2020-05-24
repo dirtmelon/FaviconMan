@@ -81,46 +81,41 @@ public class Request {
       
       let classicDataOperation =
         FaviconMan.fman.operation(for: self,
-                           urlRequest: classicRequest) { [weak self] (data, urlResponse, error) in
-                            self?.underlyingQueue.async {
-                              guard let urlResponse = urlResponse else {
-                                return
-                              }
-                              if error == nil && urlResponse.isHTTPStatusCodeOK {
-                                icons.append(Icon(url: classicRequest.url!,
-                                                  type: .classic))
-                              }
-                            }
+                                  urlRequest: classicRequest) { (result) in
+                                    if case .success(_) = result {
+                                      icons.append(Icon(url: classicRequest.url!,
+                                                        type: .classic))
+                                    }
       }
 
       // download and scan html for icon
+      var request = URLRequest(url: self.url)
+      request.httpMethod = "GET"
       let dataOperation =
         FaviconMan.fman.operation(for: self,
-                           urlRequest: URLRequest(url: self.url)) { [weak self] (data, urlResponse, error) in
+                           urlRequest: request) { [weak self] (result) in
                             guard let self = self else { return }
-                            self.underlyingQueue.async {
-                              guard let urlResponse = urlResponse else {
-                                fmError = FMError.responseNil
+                            switch result {
+                            case .success(let(data, urlResponse)):
+                              guard let data = data else {
+                                fmError = FMError.dataNil
                                 return
                               }
                               guard let url = urlResponse.url else {
                                 fmError = FMError.responseURLNil
                                 return
                               }
-                              guard let data = data else {
-                                fmError = FMError.dataNil
-                                return
-                              }
-                              guard error == nil else {
-                                fmError = .dataTaskError(error: error!)
-                                return
-                              }
                               let parser = Parser(data: data, baseURL: url)
                               icons += parser.parseHTMLHeadLinkIcons() + parser.parseHTMLHeadMetaIcons()
+                              self.parser = parser
+                            case .failure(let error):
+                              fmError = error
                             }
       }
+
       let finishOperation = BlockOperation { [weak self] in
         guard let self = self else { return }
+
         let queue = self.needToDowloadIconData ? self.underlyingQueue : .main
         queue.async {
           let result: Result<[Icon], FMError>
@@ -134,9 +129,41 @@ public class Request {
           completionHandler(result)
         }
       }
+
+      // manifest
+      let manifestURLsOperation = BlockOperation { [weak self] in
+        guard let self = self,
+          let parser = self.parser else { return }
+        let manifestURLs = parser.parseManifestURLs()
+        for url in manifestURLs {
+          let manifestURLdataOperation =
+            FaviconMan.fman.operation(for: self,
+                                      urlRequest: URLRequest(url: url)) { [weak self] (result) in
+                                        guard let self = self else { return }
+                                        switch result {
+                                        case .success(let(data, _)):
+                                          guard let data = data else {
+                                            fmError = FMError.dataNil
+                                            return
+                                          }
+                                          icons += self.parser?.parseManifestIcons(jsonData: data) ?? []
+                                        case .failure(let error):
+                                          fmError = error
+                                        }
+          }
+          finishOperation.addDependency(manifestURLdataOperation)
+          FaviconMan.fman.addOperations(for: self, operations: [manifestURLdataOperation])
+        }
+      }
+      manifestURLsOperation.addDependency(dataOperation)
+
       finishOperation.addDependency(classicDataOperation)
       finishOperation.addDependency(dataOperation)
-      FaviconMan.fman.addOperations(for: self, operations: [classicDataOperation, dataOperation, finishOperation])
+      finishOperation.addDependency(manifestURLsOperation)
+      FaviconMan.fman.addOperations(for: self, operations: [classicDataOperation,
+                                                            dataOperation,
+                                                            manifestURLsOperation,
+                                                            finishOperation])
     }
     return self
   }
@@ -199,13 +226,9 @@ public class Request {
     for icon in icons {
       let operation =
       FaviconMan.fman.operation(for: self,
-                         urlRequest: URLRequest(url: icon.url)) { [weak self] (data, response, error) in
-                          guard let self = self else { return }
-                          self.underlyingQueue.async {
-                            if let error = error {
-                              failureResults.append(.dataTaskError(error: error))
-                              return
-                            }
+                         urlRequest: URLRequest(url: icon.url)) { (result) in
+                          switch result {
+                          case .success(let (data, _)):
                             if let data = data {
                               successResults.append(IconData(data: data,
                                                              url: icon.url,
@@ -214,6 +237,9 @@ public class Request {
                             } else {
                               failureResults.append(.dataNil)
                             }
+                          case .failure(let error):
+                            failureResults.append(.dataTaskError(error: error))
+
                           }
       }
       dataTaskOperations.append(operation)

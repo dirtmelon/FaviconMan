@@ -50,4 +50,6 @@ public enum IconType: String {
   case msapplicationSquare310x310logo = "msapplication-square310x310logo"
   // <meta> property = "og:image"
   case openGraphImage
+  // <link> name = "manifest",scan from src
+  case manifest
 }
