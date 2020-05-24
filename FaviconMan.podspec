@@ -8,7 +8,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'FaviconMan'
-  s.version          = '0.1.0'
+  s.version          = '0.2.0'
   s.summary          = 'A man help you to fetch favicon.'
   s.homepage         = 'https://github.com/dirtmelon/FaviconMan'
   s.license          = { type: 'MIT', file: 'LICENSE' }
